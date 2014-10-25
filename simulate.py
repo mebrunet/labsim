@@ -3,49 +3,61 @@ import numpy as np
 
 
 # Load files as data frames
-def load_files(excel_workbook='LifeSciences.xlsx'):
-	scenarios = pd.read_excel(excel_workbook, sheetname='scenarios', skiprows=1, 
-		na_values=['NA'], index_col=0)
-	simulation = pd.read_excel(excel_workbook, sheetname='simulation', 
-		skiprows=1, na_values=['NA'])
-	laboratories = pd.read_excel(excel_workbook, sheetname='laboratories', 
-		skiprows=2, na_values=['NA'], index_col=0)
-	fumehoods = pd.read_excel(excel_workbook, sheetname='fumehoods', skiprows=2, 
-		na_values=['NA'], index_col=0)
+class simulation():
+	def __init__(self, excel_workbook='LifeSciences.xlsx'):
+		self.excel_workbook = excel_workbook
+		self.scenario_df = pd.read_excel(excel_workbook, sheetname='scenarios', 
+			skiprows=1, na_values=['NA'], index_col=0)
+		self.simulation_df = pd.read_excel(excel_workbook, sheetname='simulation', 
+			skiprows=1, na_values=['NA'])
+		self.laboratory_df = pd.read_excel(excel_workbook, sheetname='laboratories', 
+			skiprows=2, na_values=['NA'], index_col=0)
+		self.fumehood_df = pd.read_excel(excel_workbook, sheetname='fumehoods', 
+			skiprows=2, na_values=['NA'], index_col=0)
+		self.scenarios = {}
 
-	lab_scenarios = build_scenario_dict(laboratories, scenarios)
-	hood_scenarios = build_scenario_dict(fumehoods, scenarios)
-	
-	return {'scenarios':scenarios, 'simulation':simulation, 
-	'laboratories':lab_scenarios, 'fumehoods':hood_scenarios}
+	# Helper for making scenario dicts
+	def build_scenario_dict(self, df, scenario_df):
+		scenario_dict = dict()
+		for scenario in scenario_df.index:
+			temp = df.copy()
+			for parameter in [x for x in scenario_df.columns if x != 'description']:
+				if parameter in df.columns:
+					how = scenario_df[parameter][scenario]
+					if how != 'as_is':
+						if how.split(':')[0] == 'replace_all':
+							temp[parameter] = len(temp)*[how.split(':')[1]]
+			scenario_dict[scenario] = temp
+		return scenario_dict
 
+	def load_scenarios(self):
+		lab_df_dict = self.build_scenario_dict(self.laboratory_df, self.scenario_df)
+		hood_df_dict = self.build_scenario_dict(self.fumehood_df, self.scenario_df)
 
-# Helper for making scenario dicts
-def build_scenario_dict(df, scenarios):
-	scenario_dict = dict()
+		for name in self.scenario_df.index:
+			self.scenarios[name] = scenario(name, lab_df_dict[name], 
+				hood_df_dict[name])
 
-	for scenario in scenarios.index:
-		temp = df.copy()
-
-		for parameter in [x for x in scenarios.columns if x != 'description']:
-			if parameter in df.columns:
-				how = scenarios[parameter][scenario]
-				if how != 'as_is':
-					if how.split(':')[0] == 'replace_all':
-						temp[parameter] = len(temp)*[how.split(':')[1]]
-
-		scenario_dict[scenario] = temp
-
-	return scenario_dict
+class scenario():
+	def __init__(self, name, lab_df, hood_df):
+		self.name = name
+		self.laboratories = {}
+		self.fumehoods = {}
+		for lab in lab_df.index:
+			self.laboratories[lab] = laboratory(lab, lab_df.loc[lab].to_dict())
+		for hood in hood_df.index:
+			self.fumehoods[hood] = fumehood(hood, hood_df.loc[hood].to_dict())
+		for lab in self.laboratories.values():
+			lab.associate_fumehoods(self.fumehoods)
 
 
 class fumehood():
 	def __init__(self, hood_id, *args, **kwargs):
 		for dictionary in args:
-      		for key in dictionary:
-        		setattr(self, key, dictionary[key])
-	    for key in kwargs:
-	      setattr(self, key, kwargs[key])
+			for key in dictionary:
+				setattr(self, key, dictionary[key])
+		for key in kwargs:
+			setattr(self, key, kwargs[key])
 		
 		self.hood_id = hood_id
 		self.sash_percent = 0
@@ -69,11 +81,9 @@ class fumehood():
 
 	def compute_flow(self):
 		if self.occupied:
-			face_vel_cfm = self.face_vel_occupied * sash_height * 
-				self.sash_width / 144
+			face_vel_cfm = self.face_vel_occupied * sash_height * self.sash_width / 144
 		else:
-			face_vel_cfm = self.face_vel_unoccupied * sash_height * 
-				self.sash_width / 144
+			face_vel_cfm = self.face_vel_unoccupied * sash_height *	self.sash_width / 144
 
 		return np.min([self.max_cfm, np.max([self.min_cfm, face_vel_cfm])])
 
@@ -81,13 +91,13 @@ class fumehood():
 class laboratory():
 	def __init__(self, lab_id, *args, **kwargs):
 		for dictionary in args:
-	      	for key in dictionary:
-	        	setattr(self, key, dictionary[key])
+			for key in dictionary:
+				setattr(self, key, dictionary[key])
 		for key in kwargs:
-		    setattr(self, key, kwargs[key])
+			setattr(self, key, kwargs[key])
 
 		self.lab_id = lab_id
-		fumehoods = {}
+		self.fumehoods = {}
 		self.occupancy_time = -1
 		self.ach = -1
 		self.min_flow = -1
@@ -96,6 +106,11 @@ class laboratory():
 
 	def __str__(self):
   		return self.lab_id
+
+  	def associate_fumehoods(self, hood_dict):
+  		for hood in hood_dict.values():
+  			if hood.lab_id == self.lab_id:
+  				self.fumehoods[hood.hood_id] = hood
 
   	def update_occupancy(self, time, occupied):
 		self.occupancy_time = time
@@ -110,8 +125,7 @@ class laboratory():
 			if self.occupied: self.ach = self.day_occupied_ach
 			else: self.ach = self.day_unoccupied_ach
 		
-		self.min_flow = self.ach * self.surface_area * self.ceil_height / 60 +
-			self.additional_evac
+		self.min_flow = self.ach * self.surface_area * self.ceil_height / 60 + self.additional_evac
 
 	def update_all(self, time, lab_occupancy, sash_percents, hood_occupancies):
 		update_occupancy(time, lab_occupancy)
@@ -163,13 +177,13 @@ class laboratory():
 
 
 # For debugging & validation
-
+'''
 p = load_files()
 hoods = p['fumehoods']
 labs = p['laboratories']
+'''
+sim = simulation()
+sim.load_scenarios()
 
 if __name__ == '__main__':
-	print 'processing...'
-	params = load_files()
-	print params['scenarios'].head()
-	print [x for x in params['scenarios'].columns if x != 'description']
+	sim = simulation()
