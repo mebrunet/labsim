@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from scipy import stats
 
 
 # Load files as data frames
@@ -15,6 +16,10 @@ class simulation():
 		self.fumehood_df = pd.read_excel(excel_workbook, sheetname='fumehoods', 
 			skiprows=2, na_values=['NA'], index_col=0)
 		self.scenarios = {}
+
+	 	self.time_rng = pd.date_range(start=self.simulation_df['start'][0], 
+	 	end=self.simulation_df['end'][0], freq='H', tz='Canada/Eastern',
+	 	name='time')
 
 	# Helper for making scenario dicts
 	def build_scenario_dict(self, df, scenario_df):
@@ -35,12 +40,23 @@ class simulation():
 		hood_df_dict = self.build_scenario_dict(self.fumehood_df, self.scenario_df)
 
 		for name in self.scenario_df.index:
-			self.scenarios[name] = scenario(name, lab_df_dict[name], 
+			self.scenarios[name] = scenario(name, self.time_rng, lab_df_dict[name], 
 				hood_df_dict[name])
 
+	def generate_time_series(self):
+		for s in self.scenarios.values():
+			s.generate_time_series(self.time_rng)
+
+	def simulate(self):
+		for s in self.scenarios.values():
+			s.simulate():
+		pass
+
 class scenario():
-	def __init__(self, name, lab_df, hood_df):
+	def __init__(self, name, time_rng, lab_df, hood_df):
 		self.name = name
+		self.results = {}
+		self.time_rng = time_rng
 		self.laboratories = {}
 		self.fumehoods = {}
 		for lab in lab_df.index:
@@ -50,6 +66,9 @@ class scenario():
 		for lab in self.laboratories.values():
 			lab.associate_fumehoods(self.fumehoods)
 
+	def generate_time_series(self, time_rng):
+		for lab in self.laboratories:
+			self.laboratories[lab].generate_time_series(time_rng).to_csv('ts\\'+self.name+'\\'+lab+'.csv')
 
 class fumehood():
 	def __init__(self, hood_id, *args, **kwargs):
@@ -70,6 +89,10 @@ class fumehood():
 	def __str__(self):
   		return self.hood_id
 
+  	def build_sash_generator(self):
+  		if self.sash_profile in ('very_low', 'low', 'mid', 'high', 'very_high'):
+  			rv_func = lambda pk: stats.rv_discrete(values=(range(0,100,5),5 * pk))
+
 	def update_sash(self, time, sash_percent):
 		self.sash_time = time
 		self.sash_percent = sash_percent
@@ -78,6 +101,16 @@ class fumehood():
 	def update_occupancy(self, time, occupied):
 		self.occupancy_time = time
 		self.occupied = occupied
+
+	def gen_occ(self, lab_occ):
+		if lab_occ:
+			if np.random.rand() < self.hood_use_rate:
+				return True
+			else: return False
+		else: return False
+
+	def gen_sash(self, time):
+		return 50
 
 	def compute_flow(self):
 		if self.occupied:
@@ -118,7 +151,7 @@ class laboratory():
 
 	def update_ach(self, time):
 		self.ach_time
-		if time.hour < ach_day_start or time.hour > ach_night_start:
+		if time.hour < self.ach_day_start.hour or time.hour > self.ach_night_start.hour:
 			if self.occupied: self.ach = self.night_occupied_ach
 			else: self.ach = self.night_unoccupied_ach
 		else:
@@ -135,6 +168,41 @@ class laboratory():
 		for hood in sash_percents:
 			self.fumehoods[hood].update_sash(time, sash_percents[hood])
 			self.fumehoods[hood].update_occupancy(time, hood_occupancies[hood])
+
+	def generate_time_series(self, time_rng):
+		ts_dict = {'lab_occupancy':[]}
+		for hood in self.fumehoods:
+			ts_dict[hood+'-occ'] = []
+			ts_dict[hood+'-sash'] = []
+
+		for time in time_rng:
+			lab_occ = self.gen_occ(time)
+			ts_dict['lab_occupancy'].append(lab_occ)
+			for hood in self.fumehoods:
+				ts_dict[hood+'-occ'].append(self.fumehoods[hood].gen_occ(lab_occ))
+				ts_dict[hood+'-sash'].append(self.fumehoods[hood].gen_sash(time))
+		time_series_df = pd.DataFrame(ts_dict, index=time_rng)
+		return time_series_df
+
+	def gen_occ(self, time):
+		if time.weekday >= 5: # weekend
+			if time.hour < self.weekend_day_occupancy_start.hour or time.hour > self.weekend_night_occupancy_start.hour: # night
+				if np.random.rand() < self.weekend_night_occupancy_rate:
+					return True # occupied
+				else: return False # unoccupied
+			else: # day
+				if np.random.rand() < self.weekend_day_occupancy_rate:
+					return True # occupied
+				else: return False # unoccupied
+		else: # weekday
+			if time.hour < self.day_occupancy_start.hour or time.hour > self.night_occupancy_start.hour: # night
+				if np.random.rand() < night_occupancy_rate:
+					return True # occupied
+				else: return False # unoccupied
+			else: # day
+				if np.random.rand() < day_occupancy_rate:
+					return True # occupied
+				else: return False # unoccupied
 
 	def compute_flow(self, time):
 		update_ach(time)
@@ -184,6 +252,7 @@ labs = p['laboratories']
 '''
 sim = simulation()
 sim.load_scenarios()
+sim.generate_time_series()
 
 if __name__ == '__main__':
 	sim = simulation()
