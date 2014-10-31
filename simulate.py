@@ -1,7 +1,16 @@
+''' 
+TODO:
+
+-Migrate all behavioral value generation to "labbehavior.py"
+-Add mean or summary csv file to each scenario
+
+'''
+
+
+
 import pandas as pd
 import numpy as np
-from scipy import stats
-
+from labbehaviour import sashrv
 
 # Load files as data frames
 class simulation():
@@ -21,6 +30,8 @@ class simulation():
 	 	end=self.simulation_df['end'][0], freq='H', tz='Canada/Eastern',
 	 	name='time')
 
+	 	self.load_scenarios()
+
 	# Helper for making scenario dicts
 	def build_scenario_dict(self, df, scenario_df):
 		scenario_dict = dict()
@@ -31,7 +42,10 @@ class simulation():
 					how = scenario_df[parameter][scenario]
 					if how != 'as_is':
 						if how.split(':')[0] == 'replace_all':
-							temp[parameter] = len(temp)*[how.split(':')[1]]
+							try: # try to parse as int first
+								temp[parameter] = map(int, len(temp)*([how.split(':')[1]]))
+							except:
+								temp[parameter] = len(temp)*([how.split(':')[1]])
 			scenario_dict[scenario] = temp
 		return scenario_dict
 
@@ -47,10 +61,13 @@ class simulation():
 		for s in self.scenarios.values():
 			s.generate_time_series(self.time_rng)
 
-	def simulate(self):
-		for s in self.scenarios.values():
-			s.simulate():
-		pass
+	def simulate(self, *args):
+		if len(args) == 0:
+			for s in self.scenarios.values():
+				s.simulate()
+		else:
+			for s in args:
+				self.scenarios[s].simulate()
 
 class scenario():
 	def __init__(self, name, time_rng, lab_df, hood_df):
@@ -68,7 +85,11 @@ class scenario():
 
 	def generate_time_series(self, time_rng):
 		for lab in self.laboratories:
-			self.laboratories[lab].generate_time_series(time_rng).to_csv('ts\\'+self.name+'\\'+lab+'.csv')
+			self.laboratories[lab].generate_time_series(time_rng,'ts\\'+self.name+'\\'+lab+'.csv')
+
+	def simulate(self):
+		for lab in self.laboratories:
+			self.laboratories[lab].simulate('ts\\'+self.name+'\\'+lab+'.csv')
 
 class fumehood():
 	def __init__(self, hood_id, *args, **kwargs):
@@ -85,13 +106,10 @@ class fumehood():
 		self.occupancy = False
 		self.occupancy_time = -1
 		self.flow = self.min_cfm
+		self.sashrv = sashrv(self.sash_profile)
 
 	def __str__(self):
   		return self.hood_id
-
-  	def build_sash_generator(self):
-  		if self.sash_profile in ('very_low', 'low', 'mid', 'high', 'very_high'):
-  			rv_func = lambda pk: stats.rv_discrete(values=(range(0,100,5),5 * pk))
 
 	def update_sash(self, time, sash_percent):
 		self.sash_time = time
@@ -110,13 +128,13 @@ class fumehood():
 		else: return False
 
 	def gen_sash(self, time):
-		return 50
+		return self.sashrv.poll(time)
 
 	def compute_flow(self):
 		if self.occupied:
-			face_vel_cfm = self.face_vel_occupied * sash_height * self.sash_width / 144
+			face_vel_cfm = self.face_vel_occupied * self.sash_height * self.sash_width / 144
 		else:
-			face_vel_cfm = self.face_vel_unoccupied * sash_height *	self.sash_width / 144
+			face_vel_cfm = self.face_vel_unoccupied * self.sash_height * self.sash_width / 144
 
 		return np.min([self.max_cfm, np.max([self.min_cfm, face_vel_cfm])])
 
@@ -161,15 +179,15 @@ class laboratory():
 		self.min_flow = self.ach * self.surface_area * self.ceil_height / 60 + self.additional_evac
 
 	def update_all(self, time, lab_occupancy, sash_percents, hood_occupancies):
-		update_occupancy(time, lab_occupancy)
-		assert len(sash_heights) == self.num_hoods
-		assert len(hood_occupancies) == self.num_hoods
+		self.update_occupancy(time, lab_occupancy)
+		assert len(sash_percents) == len(self.fumehoods)
+		assert len(hood_occupancies) == len(self.fumehoods)
 
 		for hood in sash_percents:
 			self.fumehoods[hood].update_sash(time, sash_percents[hood])
 			self.fumehoods[hood].update_occupancy(time, hood_occupancies[hood])
 
-	def generate_time_series(self, time_rng):
+	def generate_time_series(self, time_rng, filename):
 		ts_dict = {'lab_occupancy':[]}
 		for hood in self.fumehoods:
 			ts_dict[hood+'-occ'] = []
@@ -182,7 +200,7 @@ class laboratory():
 				ts_dict[hood+'-occ'].append(self.fumehoods[hood].gen_occ(lab_occ))
 				ts_dict[hood+'-sash'].append(self.fumehoods[hood].gen_sash(time))
 		time_series_df = pd.DataFrame(ts_dict, index=time_rng)
-		return time_series_df
+		time_series_df.to_csv(filename)
 
 	def gen_occ(self, time):
 		if time.weekday >= 5: # weekend
@@ -205,7 +223,7 @@ class laboratory():
 				else: return False # unoccupied
 
 	def compute_flow(self, time):
-		update_ach(time)
+		self.update_ach(time)
 		base_lab = 0
 		equip_inc = 0
 		sash_driven = 0
@@ -213,9 +231,9 @@ class laboratory():
 		hood_sum = 0
 		hood_min = 0
 		
-		for hood in self.fumehoods:
+		for hood in self.fumehoods.values():
 			hood_sum += hood.compute_flow()
-			hood_min += hood.min_cfm()
+			hood_min += hood.min_cfm
 		
 		hood_above_min = hood_sum - hood_min
 		assert hood_above_min >= 0
@@ -237,11 +255,24 @@ class laboratory():
 
 		return(base_lab, equip_inc, sash_driven)
 
+	def simulate(self, filename):
+		print "working on :" + filename
+		df = pd.read_csv(filename, index_col = 0, parse_dates=True)
+		df['base_lab'] = None
+		df['equip_inc'] = None
+		df['sash_driven'] = None
+		for t in df.index:
+			sash_percents = {}
+			hood_occupancies ={}
+			for hood in self.fumehoods:
+				sash_percents[hood] = df[hood+'-sash'][t]
+				hood_occupancies[hood] = df[hood+'-occ'][t]
+			self.update_all(t, df.lab_occupancy[t], sash_percents, hood_occupancies)
+			(df['base_lab'][t], df['equip_inc'][t], df['sash_driven'][t]) = self.compute_flow(t)
+		df.to_csv(filename)
 
-# Generate lab occupancy
 
 
-# Generate fumehood occupancy
 
 
 # For debugging & validation
@@ -251,8 +282,9 @@ hoods = p['fumehoods']
 labs = p['laboratories']
 '''
 sim = simulation()
-sim.load_scenarios()
-sim.generate_time_series()
+# sim.generate_time_series()
+#sim.simulate()
+
 
 if __name__ == '__main__':
 	sim = simulation()
