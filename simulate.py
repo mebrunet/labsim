@@ -69,6 +69,13 @@ class simulation():
 			for s in args:
 				self.scenarios[s].simulate()
 
+	def summarize(self):
+		writer = pd.ExcelWriter('summary.xlsx')
+		for s in self.scenarios:
+			self.scenarios[s].summarize().to_excel(writer, s)
+		writer.save()
+
+
 class scenario():
 	def __init__(self, name, time_rng, lab_df, hood_df):
 		self.name = name
@@ -90,6 +97,24 @@ class scenario():
 	def simulate(self):
 		for lab in self.laboratories:
 			self.laboratories[lab].simulate('ts\\'+self.name+'\\'+lab+'.csv')
+
+	def summarize(self):
+		print self.name
+		index = []
+		result = {}
+		result['base_lab'] =[]
+		result['equip_inc'] = []
+		result['sash_driven'] = []
+		for lab in self.laboratories:
+			print lab
+			index.append(lab)
+			df = pd.DataFrame.from_csv('ts\\'+self.name+'\\'+lab+'.csv')
+			result['base_lab'].append(df['base_lab'].mean())
+			result['equip_inc'].append(df['equip_inc'].mean())
+			result['sash_driven'].append(df['sash_driven'].mean())
+		df = pd.DataFrame(result, index = index)
+		df.to_csv('ts\\'+self.name+'\\summary.csv')
+		return df
 
 class fumehood():
 	def __init__(self, hood_id, *args, **kwargs):
