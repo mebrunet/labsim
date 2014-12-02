@@ -33,5 +33,5 @@ class sashrv():
 		if self.profile_type == 'constant':
 			return self.sash_height
 		else:
-			rv = self.density_by_time.get_group((time.hour, time.weekday >= 5))['rv'].iloc[0]
+			rv = self.density_by_time.get_group((time.hour, time.weekday() >= 5))['rv'].iloc[0]
 			return rv.rvs() + 5 * np.random.ranf()
