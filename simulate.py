@@ -15,7 +15,7 @@ from labbehaviour import sashrv
 
 # Load files as data frames
 class simulation():
-	def __init__(self, name ='Wong'):
+	def __init__(self, name ='PK-Proposed'):
 		self.name = name
 		
 		excel_workbook = name + '.xlsx'
@@ -48,8 +48,8 @@ class simulation():
 					how = scenario_df[parameter][scenario]
 					if how != 'as_is':
 						if how.split(':')[0] == 'replace_all':
-							try: # try to parse as int first
-								temp[parameter] = map(int, len(temp)*([how.split(':')[1]]))
+							try: # try to parse as float first
+								temp[parameter] = map(float, len(temp)*([how.split(':')[1]]))
 							except:
 								temp[parameter] = len(temp)*([how.split(':')[1]])
 			scenario_dict[scenario] = temp
@@ -81,16 +81,16 @@ class simulation():
 		index = []
 		result = {}
 		result['base_lab'] =[]
-		result['equip_inc'] = []
-		result['sash_driven'] = []
+		result['limits_driven'] = []
+		result['user_driven'] = []
 		result['total']  = []
 
 		for s in self.scenarios:
 			index.append(s)
 			df = self.scenarios[s].summarize()
 			result['base_lab'].append(df['base_lab'].sum())
-			result['equip_inc'].append(df['equip_inc'].sum())
-			result['sash_driven'].append(df['sash_driven'].sum())
+			result['limits_driven'].append(df['limits_driven'].sum())
+			result['user_driven'].append(df['user_driven'].sum())
 			result['total'].append(df['total'].sum())
 			df.to_excel(writer, s)
 
@@ -103,9 +103,6 @@ class simulation():
 		#df.index.name = 'scenario'
 		df.to_excel(writer, 'summary')
 		writer.save()
-
-		
-
 
 class scenario():
 	def __init__(self, simulation_name, scenario_name, time_rng, lab_df, hood_df):
@@ -136,19 +133,19 @@ class scenario():
 		index = []
 		result = {}
 		result['base_lab'] =[]
-		result['equip_inc'] = []
-		result['sash_driven'] = []
+		result['limits_driven'] = []
+		result['user_driven'] = []
 		
 		for lab in self.laboratories:
 			#print lab
 			index.append(lab)
 			df = pd.DataFrame.from_csv(self.sim_name+'-ts\\'+self.name+'\\'+lab+'.csv')
 			result['base_lab'].append(df['base_lab'].mean())
-			result['equip_inc'].append(df['equip_inc'].mean())
-			result['sash_driven'].append(df['sash_driven'].mean())
+			result['limits_driven'].append(df['limits_driven'].mean())
+			result['user_driven'].append(df['user_driven'].mean())
 		df = pd.DataFrame(result, index = index)
 		#df.index.name = 'lab_id'
-		df['total'] = df['base_lab'] + df['equip_inc'] + df['sash_driven']
+		df['total'] = df['base_lab'] + df['limits_driven'] + df['user_driven']
 		df.to_csv(self.sim_name+'-ts\\'+self.name+'\\summary.csv')
 		return df
 
@@ -156,6 +153,7 @@ class laboratory():
 	def __init__(self, lab_id, *args, **kwargs):
 		for dictionary in args:
 			for key in dictionary:
+				#print key
 				setattr(self, key, dictionary[key])
 		for key in kwargs:
 			setattr(self, key, kwargs[key])
@@ -167,6 +165,10 @@ class laboratory():
 		self.min_flow = -1
 		self.ach_time = -1
 		self.occupied = False
+		self.equipment_time = -1
+		self.additional_equipment_on = False
+		self.additional_equipment_flow = -1
+		#self.additional_equipment_flow = self.additional_equipment_min + (self.additional_equipment_max-self.additional_equipment_min)*self.additional_equipment_use_rate
 
 	def __str__(self):
   		return self.lab_id
@@ -181,10 +183,13 @@ class laboratory():
   		except AssertionError:
   			print self.lab_id + ' has a mismatched number of fumehoods'
 
-
   	def update_occupancy(self, time, occupied):
 		self.occupancy_time = time
 		self.occupied = occupied
+
+	def update_equip_use(self, time, equip_on):
+		self.equipment_time = time
+		self.additional_equipment_on = equip_on
 
 	def update_ach(self, time):
 		self.ach_time
@@ -195,10 +200,19 @@ class laboratory():
 			if self.occupied: self.ach = self.day_occupied_ach
 			else: self.ach = self.day_unoccupied_ach
 		
-		self.min_flow = self.ach * self.surface_area * self.ceil_height / 60 + self.additional_evac
+		self.min_flow = self.ach * self.surface_area * self.ceil_height / 60
 
-	def update_all(self, time, lab_occupancy, sash_percents, hood_occupancies):
+	def update_equipment_flow(self,time):
+		if self.additional_equipment_on:
+			self.additional_equipment_flow = self.additional_equipment_max
+		else:
+			self.additional_equipment_flow = self.additional_equipment_min
+
+	def update_all(self, time, lab_occupancy, equip_on, sash_percents, hood_occupancies):
 		self.update_occupancy(time, lab_occupancy)
+		self.update_ach(time)
+		self.update_equip_use(time, equip_on)
+		self.update_equipment_flow(time)
 		assert len(sash_percents) == len(self.fumehoods)
 		assert len(hood_occupancies) == len(self.fumehoods)
 
@@ -207,14 +221,18 @@ class laboratory():
 			self.fumehoods[hood].update_occupancy(time, hood_occupancies[hood])
 
 	def generate_time_series(self, time_rng, filename):
-		ts_dict = {'lab_occupancy':[]}
+		ts_dict = {}
+		ts_dict['lab_occupancy'] = []
+		ts_dict['other_equipment_on'] = []
 		for hood in self.fumehoods:
 			ts_dict[hood+'-occ'] = []
 			ts_dict[hood+'-sash'] = []
 
 		for time in time_rng:
 			lab_occ = self.gen_occ(time)
+			equip_on = self.gen_equipment_use(time)
 			ts_dict['lab_occupancy'].append(lab_occ)
+			ts_dict['other_equipment_on'].append(equip_on)
 			for hood in self.fumehoods:
 				ts_dict[hood+'-occ'].append(self.fumehoods[hood].gen_occ(lab_occ))
 				ts_dict[hood+'-sash'].append(self.fumehoods[hood].gen_sash(time))
@@ -253,11 +271,15 @@ class laboratory():
 					return True # occupied
 				else: return False # unoccupied
 
+	def gen_equipment_use(self, time):
+		if np.random.rand() < self.additional_equipment_use_rate:
+			return True
+		else: return False #Equipment not being used
+
 	def compute_flow(self, time):
-		self.update_ach(time)
 		base_lab = 0
-		equip_inc = 0
-		sash_driven = 0
+		limits_driven = 0
+		user_driven = 0
 
 		hood_sum = 0
 		hood_min = 0
@@ -270,36 +292,36 @@ class laboratory():
 		assert hood_above_min >= 0
 
 		# TODO - vary equipment min / max
-		if self.min_flow > self.additional_equipment_max + hood_sum:
+		if self.min_flow > self.min_gen_evac + self.additional_equipment_flow + hood_sum: # Everything
 			base_lab = self.min_flow
-			equip_inc = 0
-			sash_driven = 0
-		elif self.min_flow > self.additional_equipment_max + hood_min:
+			limits_driven = 0
+			user_driven = 0
+		elif self.min_flow > self.min_gen_evac + self.additional_equipment_min + hood_min: # Everything except sash driven
 			base_lab = self.min_flow
-			equip_inc = 0
-			sash_driven = self.additional_equipment_max + hood_sum - self.min_flow
-			assert sash_driven > 0
+			limits_driven = 0
+			user_driven = self.min_gen_evac + self.additional_equipment_flow + hood_sum - self.min_flow
+			assert user_driven > 0
 		else:
 			base_lab = self.min_flow
-			equip_inc = self.additional_equipment_max + hood_min - self.min_flow
-			sash_driven = hood_above_min
+			limits_driven = self.min_gen_evac + self.additional_equipment_min + hood_min - self.min_flow
+			user_driven = hood_above_min + (self.additional_equipment_flow - self.additional_equipment_min)
 
-		return(base_lab, equip_inc, sash_driven)
+		return(base_lab, limits_driven, user_driven)
 
 	def simulate(self, filename):
 		print "working on :" + filename
 		df = pd.read_csv(filename, index_col = 0, parse_dates=True)
 		df['base_lab'] = None
-		df['equip_inc'] = None
-		df['sash_driven'] = None
+		df['limits_driven'] = None
+		df['user_driven'] = None
 		for t in df.index:
 			sash_percents = {}
 			hood_occupancies ={}
 			for hood in self.fumehoods:
 				sash_percents[hood] = df[hood+'-sash'][t]
 				hood_occupancies[hood] = df[hood+'-occ'][t]
-			self.update_all(t, df.lab_occupancy[t], sash_percents, hood_occupancies)
-			(df['base_lab'][t], df['equip_inc'][t], df['sash_driven'][t]) = self.compute_flow(t)
+			self.update_all(t, df.lab_occupancy[t], df.other_equipment_on[t], sash_percents, hood_occupancies)
+			(df['base_lab'][t], df['limits_driven'][t], df['user_driven'][t]) = self.compute_flow(t)
 		df.to_csv(filename)
 
 
