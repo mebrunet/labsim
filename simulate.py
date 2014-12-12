@@ -6,8 +6,6 @@ TODO:
 
 '''
 
-
-
 import pandas as pd
 import numpy as np
 import os
@@ -15,7 +13,7 @@ from labbehaviour import sashrv
 
 # Load files as data frames
 class simulation():
-	def __init__(self, name ='PK-Proposed'):
+	def __init__(self, name ='SB'):
 		self.name = name
 		
 		excel_workbook = name + '.xlsx'
